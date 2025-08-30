@@ -73,6 +73,23 @@ UNIVERSITY_DATA = {
     ]
 }
 
+# Extended university data with more comprehensive mappings
+EXTENDED_UNIVERSITY_DATA = {
+    "United States": UNIVERSITY_DATA["USA"],
+    "USA": UNIVERSITY_DATA["USA"],
+    "US": UNIVERSITY_DATA["USA"],
+    "United Kingdom": UNIVERSITY_DATA["UK"],
+    "UK": UNIVERSITY_DATA["UK"],
+    "Britain": UNIVERSITY_DATA["UK"],
+    "Germany": UNIVERSITY_DATA["Germany"],
+    "Deutschland": UNIVERSITY_DATA["Germany"],
+    "India": UNIVERSITY_DATA["India"],
+    "Bharat": UNIVERSITY_DATA["India"],
+    "Canada": UNIVERSITY_DATA["Canada"],
+    "Australia": UNIVERSITY_DATA["Australia"],
+    "AUS": UNIVERSITY_DATA["Australia"]
+}
+
 
 # --- Function to Fetch Data with Caching ---
 @st.cache_data(ttl=3600)  # Cache data for 1 hour
@@ -107,6 +124,102 @@ def get_university_data(country):
             'Program Strength': np.random.choice(['⭐⭐⭐⭐⭐', '⭐⭐⭐⭐', '⭐⭐⭐'])
         })
     return pd.DataFrame(universities)
+
+
+def get_cached_universities(country_input):
+    """Get cached university data with flexible country matching."""
+    # Try direct lookup first
+    if country_input in EXTENDED_UNIVERSITY_DATA:
+        return EXTENDED_UNIVERSITY_DATA[country_input]
+    
+    # Try case-insensitive lookup
+    country_lower = country_input.lower()
+    for key, value in EXTENDED_UNIVERSITY_DATA.items():
+        if key.lower() == country_lower:
+            return value
+    
+    # Try partial matching
+    for key, value in EXTENDED_UNIVERSITY_DATA.items():
+        if country_lower in key.lower() or key.lower() in country_lower:
+            return value
+    
+    return []
+
+
+def fetch_universities_with_fallback(country_input):
+    """Fetch universities with robust fallback mechanism."""
+    try:
+        # Try API call first
+        url = f"http://universities.hipolabs.com/search?country={country_input}"
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        
+        data = response.json()
+        if data:
+            return data, "api"
+        else:
+            # API returned empty, use cached data
+            cached_unis = get_cached_universities(country_input)
+            if cached_unis:
+                # Convert to API format for consistency
+                cached_data = [{"name": uni, "web_pages": [f"https://{uni.lower().replace(' ', '')}.edu"]} for uni in cached_unis]
+                return cached_data, "cached"
+            else:
+                return [], "none"
+    
+    except requests.exceptions.RequestException as e:
+        # API failed, use cached data
+        cached_unis = get_cached_universities(country_input)
+        if cached_unis:
+            cached_data = [{"name": uni, "web_pages": [f"https://{uni.lower().replace(' ', '')}.edu"]} for uni in cached_unis]
+            return cached_data, "cached"
+        else:
+            return [], "error"
+
+
+def search_university_by_name_with_fallback(university_name):
+    """Search for specific university with fallback."""
+    try:
+        url = f"http://universities.hipolabs.com/search?name={university_name}"
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        
+        data = response.json()
+        if data:
+            return data, "api"
+        else:
+            # Search in cached data
+            found_unis = []
+            search_term = university_name.lower()
+            
+            for country_unis in EXTENDED_UNIVERSITY_DATA.values():
+                for uni in country_unis:
+                    if search_term in uni.lower():
+                        found_unis.append({
+                            "name": uni,
+                            "country": "Multiple countries available",
+                            "state-province": "N/A",
+                            "web_pages": [f"https://{uni.lower().replace(' ', '')}.edu"]
+                        })
+            
+            return found_unis, "cached" if found_unis else "none"
+    
+    except requests.exceptions.RequestException:
+        # API failed, search in cached data
+        found_unis = []
+        search_term = university_name.lower()
+        
+        for country_unis in EXTENDED_UNIVERSITY_DATA.values():
+            for uni in country_unis:
+                if search_term in uni.lower():
+                    found_unis.append({
+                        "name": uni,
+                        "country": "Multiple countries available",
+                        "state-province": "N/A",
+                        "web_pages": [f"https://{uni.lower().replace(' ', '')}.edu"]
+                    })
+        
+        return found_unis, "cached" if found_unis else "error"
 
 
 # Custom CSS
@@ -232,7 +345,7 @@ if step == "🎯 Career Prediction":
                      title="Preparation Timeline (Months)")
         st.plotly_chart(fig, use_container_width=True)
 
-# ================ UNIVERSITY EXPLORER (API BASED) ================
+# ================ UNIVERSITY EXPLORER (API BASED WITH FALLBACK) ================
 elif step == "🏛 University Explorer":
     st.header("🏛 Discover Your Dream Universities")
 
@@ -243,58 +356,63 @@ elif step == "🏛 University Explorer":
     if st.button("Fetch Universities"):
         if country:
             with st.spinner(f"Searching for universities in {country}..."):
-                try:
-                    url = f"http://universities.hipolabs.com/search?country={country}"
-                    response = requests.get(url)
-                    data = response.json()
+                data, source = fetch_universities_with_fallback(country)
+                
+                if data:
+                    # Display source information
+                    if source == "api":
+                        st.success(f"✅ Found {len(data)} universities in {country} (Live data)")
+                    elif source == "cached":
+                        st.info(f"📋 Showing cached universities for {country} (API unavailable)")
+                    
+                    univ_list = [
+                        {
+                            "University Name": u["name"],
+                            "Website": u["web_pages"][0] if u.get("web_pages") else "N/A"
+                        }
+                        for u in data[:20]  # Limit to top 20
+                    ]
+                    df = pd.DataFrame(univ_list)
 
-                    if data:
-                        univ_list = [
-                            {
-                                "University Name": u["name"],
-                                "Website": u["web_pages"][0] if u.get("web_pages") else ""
-                            }
-                            for u in data[:20]  # Limit to top 20
-                        ]
-                        df = pd.DataFrame(univ_list)
+                    st.success(f"🎓 Top {program} Universities in {country}")
+                    st.dataframe(df, use_container_width=True)
 
-                        st.success(f"🎓 Top {program} Universities in {country}")
-                        st.dataframe(df, use_container_width=True)
-
-                    else:
-                        st.error(f"⚠ No universities found for {country}. Please try another name.")
-                except Exception as e:
-                    st.error(f"⚠ Failed to fetch universities: {e}")
+                elif source == "none":
+                    st.warning(f"⚠ No universities found for '{country}'. Please try another country name (e.g., 'United States', 'Canada', 'Germany').")
+                else:  # source == "error"
+                    st.error(f"⚠ Failed to fetch universities for '{country}' and no cached data available. Please try a different country name.")
         else:
             st.warning("⚠ Please enter a country name.")
+    
     st.markdown("---")
     university_name = st.text_input("🎯 Or Search for a Specific University")
 
     if st.button("🔎 Search University by Name"):
         if university_name.strip():
             with st.spinner(f"Searching for '{university_name}'..."):
-                url = f"http://universities.hipolabs.com/search?name={university_name}"
-                response = requests.get(url)
+                results, source = search_university_by_name_with_fallback(university_name)
+                
+                if results:
+                    if source == "api":
+                        st.success(f"✅ Found {len(results)} universities matching '{university_name}' (Live data)")
+                    elif source == "cached":
+                        st.info(f"📋 Found {len(results)} universities matching '{university_name}' in cached data (API unavailable)")
 
-                if response.status_code == 200:
-                    results = response.json()
-                    if results:
-                        st.success(f"✅ Found {len(results)} universities matching '{university_name}'")
-
-                        for uni in results:
-                            st.markdown(f"""
-                                🎓 **{uni['name']}**  
-                                🗺 Country: {uni['country']}  
-                                🏛 State/Province: {uni.get('state-province', 'N/A')}  
-                                🔗 [Website]({uni['web_pages'][0]})
-                                """)
-                            st.divider()
-                    else:
-                        st.warning(f"⚠ No universities found for '{university_name}'. Try again.")
-                else:
-                    st.error("❌ API request failed. Please try again later.")
+                    for uni in results:
+                        st.markdown(f"""
+                            🎓 **{uni['name']}**  
+                            🗺 Country: {uni.get('country', 'N/A')}  
+                            🏛 State/Province: {uni.get('state-province', 'N/A')}  
+                            🔗 [Website]({uni['web_pages'][0] if uni.get('web_pages') else '#'})
+                            """)
+                        st.divider()
+                elif source == "none":
+                    st.warning(f"⚠ No universities found matching '{university_name}'. Try a different search term.")
+                else:  # source == "error"
+                    st.error(f"❌ Search failed and no cached data found for '{university_name}'. Please try again later.")
         else:
             st.warning("⚠ Please enter a university name to search.")
+
 # ================ FINANCIAL PLANNER ================
 elif step == "💰 Financial Planner":
     st.header("💰 Smart Financial Planning")
